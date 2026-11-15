@@ -1,0 +1,11 @@
+R
+node_modules
+*.pyc
+__pycache__
+.*
+!.gitignore
+!.experiments
+# Kerberos keytabs are credentials
+keytabs/
+*.keytab
+exports/
