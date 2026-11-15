@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zero Query</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <h1>Zero Query</h1>
+      <p class="sub">Ask about your data in plain language.</p>
+      <span id="mode" class="badge" hidden></span>
+    </header>
+
+    <form id="ask-form" autocomplete="off">
+      <input id="question" name="question" type="text" required maxlength="2000"
+             placeholder="e.g. What was total revenue by region?">
+      <button id="ask-btn" type="submit">Ask</button>
+    </form>
+
+    <div class="examples" id="examples">
+      <button type="button">What was total revenue by region?</button>
+      <button type="button">Top 5 products by revenue</button>
+      <button type="button">Show monthly revenue trend</button>
+      <button type="button">How many customers per segment?</button>
+    </div>
+
+    <section id="result" hidden>
+      <div class="answer-head"><span id="route" class="badge"></span></div>
+      <p id="answer"></p>
+      <details id="sql-box" hidden>
+        <summary>Generated SQL</summary>
+        <pre id="sql"></pre>
+      </details>
+      <div id="table-wrap" class="table-wrap" hidden><table id="table"></table></div>
+      <p id="note" class="note" hidden></p>
+    </section>
+
+    <p id="error" class="error" hidden></p>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
