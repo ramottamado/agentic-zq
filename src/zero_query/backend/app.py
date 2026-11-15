@@ -26,6 +26,24 @@ from zero_query.config import get_settings
 log = logging.getLogger("zero_query.backend")
 
 
+RATE_LIMIT_DETAIL = "The AI service has reached its usage limit. Please try again later."
+
+
+def is_rate_limited(exc: BaseException | None) -> bool:
+    """True if `exc` or anything it was raised from is an LLM provider rate limit (HTTP 429).
+
+    Matched by class name and `status_code` rather than importing the provider SDK, and the
+    cause chain is walked because LangGraph and LangChain wrap the original error.
+    """
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if getattr(exc, "status_code", None) == 429 or any(c.__name__ == "RateLimitError" for c in type(exc).__mro__):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
 
@@ -72,6 +90,9 @@ def create_app(graph: CompiledStateGraph | None = None) -> FastAPI:
         except Exception as exc:
             # Details (hosts, provider payloads) stay in the log; the browser gets a reference to quote.
             reference = uuid.uuid4().hex[:8]
+            if is_rate_limited(exc):
+                log.warning("LLM rate limit (ref %s): %s", reference, exc)
+                raise HTTPException(status_code=429, detail=f"{RATE_LIMIT_DETAIL} (ref {reference})") from exc
             log.exception("graph failed (ref %s)", reference)
             raise HTTPException(
                 status_code=502,
