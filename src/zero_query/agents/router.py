@@ -7,6 +7,7 @@ here, and adding the node + edge in graph.py.
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -32,7 +33,7 @@ def mock_route(question: str) -> Route:
     return "sql" if _DATA_WORDS.search(question) else "general"
 
 
-def make_router(llm: BaseChatModel | None):
+def make_router(llm: BaseChatModel | None) -> Callable[[ZeroQueryState], Awaitable[ZeroQueryState]]:
     async def router(state: ZeroQueryState) -> ZeroQueryState:
         question = state["question"]
         if llm is None:

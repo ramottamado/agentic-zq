@@ -14,9 +14,19 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.server.mcpserver import MCPServer
 
+from zero_query.errors import WAREHOUSE_UNAVAILABLE_MARKER
+
 
 class ToolCallError(RuntimeError):
-    """The MCP tool reported an error (e.g. rejected or failing SQL)."""
+    """The MCP tool reported an error (e.g. rejected or failing SQL).
+
+    `unavailable` is true when the warehouse itself could not be reached, in which case rewriting
+    the SQL is pointless.
+    """
+
+    def __init__(self, message: str, *, unavailable: bool = False) -> None:
+        super().__init__(message)
+        self.unavailable = unavailable
 
 
 class ImpalaTools:
@@ -38,7 +48,7 @@ class ImpalaTools:
                 result = await client.call_tool(name, arguments or {})
         text = "\n".join(getattr(block, "text", "") for block in result.content)
         if result.is_error:
-            raise ToolCallError(text or f"{name} failed")
+            raise ToolCallError(text or f"{name} failed", unavailable=WAREHOUSE_UNAVAILABLE_MARKER in text)
         if isinstance(result.structured_content, dict):
             return result.structured_content
         return json.loads(text)

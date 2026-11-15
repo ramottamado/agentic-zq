@@ -9,13 +9,13 @@ The UI only talks to `POST /api/ask`; it never knows which agent answered beyond
 from __future__ import annotations
 
 import logging
-import os
+import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
+from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 
 from zero_query.agents.graph import build_graph
@@ -24,8 +24,6 @@ from zero_query.agents.mcp_client import ImpalaTools
 from zero_query.config import get_settings
 
 log = logging.getLogger("zero_query.backend")
-
-FRONTEND_DIR = Path(os.environ.get("ZQ_FRONTEND_DIR", Path(__file__).resolve().parents[3] / "frontend"))
 
 
 class AskRequest(BaseModel):
@@ -36,13 +34,13 @@ class AskResponse(BaseModel):
     answer: str
     route: str
     sql: str | None = None
-    columns: list[str] = []
-    rows: list[list[Any]] = []
+    columns: list[str] = Field(default_factory=list)
+    rows: list[list[Any]] = Field(default_factory=list)
     truncated: bool = False
     error: str | None = None
 
 
-def create_app(graph=None) -> FastAPI:
+def create_app(graph: CompiledStateGraph | None = None) -> FastAPI:
     """`graph` can be injected (tests); otherwise it is built from settings at startup."""
     settings = get_settings()
 
@@ -70,9 +68,14 @@ def create_app(graph=None) -> FastAPI:
     async def ask(req: AskRequest) -> AskResponse:
         try:
             state = await app.state.graph.ainvoke({"question": req.question.strip()})
-        except Exception as exc:  # surface infra failures (MCP down, LLM errors) to the UI
-            log.exception("graph failed")
-            raise HTTPException(status_code=502, detail=f"Agent pipeline failed: {exc}") from exc
+        except Exception as exc:
+            # Details (hosts, provider payloads) stay in the log; the browser gets a reference to quote.
+            reference = uuid.uuid4().hex[:8]
+            log.exception("graph failed (ref %s)", reference)
+            raise HTTPException(
+                status_code=502,
+                detail=f"The assistant could not complete this request. Please try again. (ref {reference})",
+            ) from exc
         return AskResponse(
             answer=state.get("answer", ""),
             route=state.get("route", "unknown"),
@@ -84,8 +87,8 @@ def create_app(graph=None) -> FastAPI:
         )
 
     # Off when the UI is deployed as its own CAI Application (scripts/cai/app_frontend.py).
-    if settings.serve_ui and FRONTEND_DIR.is_dir():
-        app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+    if settings.serve_ui and settings.frontend_dir.is_dir():
+        app.mount("/", StaticFiles(directory=settings.frontend_dir, html=True), name="frontend")
     return app
 
 

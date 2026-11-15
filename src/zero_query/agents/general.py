@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -23,7 +25,7 @@ MOCK_HELP = (
 )
 
 
-def make_general_agent(llm: BaseChatModel | None):
+def make_general_agent(llm: BaseChatModel | None) -> Callable[[ZeroQueryState], Awaitable[ZeroQueryState]]:
     async def general_agent(state: ZeroQueryState) -> ZeroQueryState:
         if llm is None:
             return {"answer": MOCK_HELP}

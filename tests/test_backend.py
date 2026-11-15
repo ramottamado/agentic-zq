@@ -18,3 +18,15 @@ def test_ask_endpoint(tools):
 def test_rejects_empty_question(tools):
     with TestClient(create_app(graph=build_graph(tools, llm=None))) as client:
         assert client.post("/api/ask", json={"question": ""}).status_code == 422
+
+
+def test_pipeline_failure_hides_internal_details_but_gives_a_reference():
+    class Exploding:
+        async def ainvoke(self, _state):
+            raise RuntimeError("connect to secret-host.internal failed")
+
+    with TestClient(create_app(graph=Exploding())) as client:
+        res = client.post("/api/ask", json={"question": "anything"})
+    assert res.status_code == 502
+    assert "secret-host" not in res.text
+    assert "ref " in res.json()["detail"]

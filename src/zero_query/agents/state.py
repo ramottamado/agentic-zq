@@ -18,5 +18,7 @@ class ZeroQueryState(TypedDict, total=False):
     truncated: bool
     error: str | None
     attempts: int
+    unavailable: bool  # the warehouse could not be reached: do not retry
+    empty_result: bool  # the last query ran but returned no data
     # Final output
     answer: str

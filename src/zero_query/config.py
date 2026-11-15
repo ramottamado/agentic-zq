@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_MAX_SQL_ATTEMPTS = 3
 
 
 def _flag(name: str, default: bool) -> bool:
@@ -47,6 +49,8 @@ class Settings:
     app_host: str
     app_port: int
     serve_ui: bool
+    # Static UI files, served by the backend (all-in-one) or by the frontend app
+    frontend_dir: Path
     # Frontend app: where to forward /api/* requests
     backend_url: str | None
     # Bearer token sent on app-to-app calls (frontend -> backend -> MCP) through the CAI proxy
@@ -107,10 +111,11 @@ def get_settings() -> Settings:
         app_host=os.environ.get("ZQ_APP_HOST", "127.0.0.1"),
         app_port=int(app_port),
         serve_ui=_flag("ZQ_SERVE_UI", True),
+        frontend_dir=Path(os.environ.get("ZQ_FRONTEND_DIR") or Path(__file__).resolve().parents[2] / "frontend"),
         backend_url=_app_url("ZQ_BACKEND_URL", "ZQ_BACKEND_SUBDOMAIN"),
         service_token=os.environ.get("ZQ_SERVICE_TOKEN") or None,
         max_rows=int(os.environ.get("ZQ_MAX_ROWS", "200")),
-        max_sql_attempts=int(os.environ.get("ZQ_MAX_SQL_ATTEMPTS", "3")),
+        max_sql_attempts=int(os.environ.get("ZQ_MAX_SQL_ATTEMPTS", DEFAULT_MAX_SQL_ATTEMPTS)),
         warehouse=os.environ.get("ZQ_WAREHOUSE", "mock").strip().lower(),
         impala_host=os.environ.get("IMPALA_HOST") or None,
         impala_port=int(os.environ.get("IMPALA_PORT", "443")),

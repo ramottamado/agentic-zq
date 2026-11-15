@@ -3,24 +3,30 @@
     load_schema -> generate_sql -> execute_sql --ok--> summarize -> END
                         ^              |
                         +--error-------+   (retry until max_sql_attempts, then give up)
+                        +--empty-------+   (a result with no data is retried the same way)
 
 All data access goes through the Impala MCP server (`ImpalaTools`); this agent never
 connects to the warehouse directly. Guardrails (read-only, row cap) are enforced by
 the MCP server, so a bad generated query fails there and is fed back here for repair.
+A warehouse outage is different: no SQL can fix it, so the agent gives up straight away.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from numbers import Number
+from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from zero_query.agents.llm import message_text
 from zero_query.agents.mcp_client import ImpalaTools, ToolCallError
 from zero_query.agents.state import ZeroQueryState
+from zero_query.config import DEFAULT_MAX_SQL_ATTEMPTS
 
 SQL_PROMPT = """You write a single read-only SQL query that answers the user's question.
 
@@ -41,9 +47,20 @@ Previous query:
 Error:
 {error}"""
 
+EMPTY_RESULT_SUFFIX = """
+
+Your previous query ran but returned no usable data (no rows, or only NULL values).
+Previous query:
+{sql}
+If a filter value may be wrong (spelling, case, or a code used instead of a word), correct it.
+Otherwise return the same query."""
+
 SUMMARY_PROMPT = """You explain query results to a business user. Answer the question directly in \
 1-3 sentences using the numbers in the result. Do not mention SQL. If the result was truncated, say \
 the answer is based on the first rows returned."""
+
+GIVE_UP_ANSWER = "Sorry, I couldn't build a working query for that question. Try rephrasing it."
+UNAVAILABLE_ANSWER = "The data warehouse is temporarily unavailable. Please try again in a few minutes."
 
 SUMMARY_ROW_LIMIT = 50
 
@@ -53,6 +70,11 @@ _FENCE = re.compile(r"```(?:sql)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 def extract_sql(text: str) -> str:
     match = _FENCE.search(text)
     return (match.group(1) if match else text).strip().rstrip(";").strip()
+
+
+def has_no_data(rows: list[list[Any]]) -> bool:
+    """True for no rows, or rows made only of NULLs (e.g. SUM over a filter that matched nothing)."""
+    return all(value is None for row in rows for value in row)
 
 
 # --- mock behaviour (no LLM) ----------------------------------------------------------
@@ -93,19 +115,26 @@ _MOCK_FALLBACK = "SELECT * FROM sales.orders ORDER BY order_date DESC LIMIT 10"
 
 
 def mock_generate_sql(question: str) -> str:
-    q = question.lower()
+    lowered = question.lower()
     for keywords, sql in _MOCK_QUERIES:
-        if any(k in q for k in keywords):
+        if any(keyword in lowered for keyword in keywords):
             return sql
     return _MOCK_FALLBACK
 
 
-def mock_summarize(columns: list[str], rows: list[list], truncated: bool) -> str:
+def _format_value(value: Any) -> str:
+    """Thousands separators for numbers; anything else (text, NULL, dates) as plain text."""
+    if isinstance(value, Number) and not isinstance(value, bool):
+        return f"{value:,}"
+    return "no value" if value is None else str(value)
+
+
+def mock_summarize(columns: list[str], rows: list[list[Any]], truncated: bool) -> str:
     if not rows:
         return "The query returned no rows."
     if len(rows) == 1 and len(columns) == 1:
-        return f"{columns[0].replace('_', ' ').capitalize()}: {rows[0][0]:,}."
-    first = ", ".join(f"{c}={v}" for c, v in zip(columns, rows[0], strict=False))
+        return f"{columns[0].replace('_', ' ').capitalize()}: {_format_value(rows[0][0])}."
+    first = ", ".join(f"{column}={value}" for column, value in zip(columns, rows[0], strict=False))
     more = " (results truncated)" if truncated else ""
     return (
         f"Found {len(rows)} rows{more}. First row: {first}. (Mock mode: set OPENROUTER_API_KEY for a written answer.)"
@@ -115,48 +144,64 @@ def mock_summarize(columns: list[str], rows: list[list], truncated: bool) -> str
 # --- graph ---------------------------------------------------------------------------
 
 
-def build_sql_agent(tools: ImpalaTools, llm: BaseChatModel | None, max_attempts: int = 3):
-    async def load_schema(state: ZeroQueryState) -> ZeroQueryState:
-        parts = []
-        for t in await tools.list_tables():
-            cols = await tools.describe_table(t["table"])
-            col_list = ", ".join(f"{c['column']} {c['type']}" for c in cols)
-            parts.append(f"{t['table']} ({col_list})  -- {t['comment']}")
-        return {"schema": "\n".join(parts), "attempts": 0, "error": None}
+class SqlAgent:
+    """The nodes of the SQL subgraph. `llm=None` selects the rule-based mock behaviour."""
 
-    async def generate_sql(state: ZeroQueryState) -> ZeroQueryState:
-        if llm is None:
+    def __init__(self, tools: ImpalaTools, llm: BaseChatModel | None, max_attempts: int) -> None:
+        self.tools = tools
+        self.llm = llm
+        self.max_attempts = max_attempts
+
+    async def load_schema(self, state: ZeroQueryState) -> ZeroQueryState:
+        parts = []
+        for table in await self.tools.list_tables():
+            columns = await self.tools.describe_table(table["table"])
+            column_list = ", ".join(f"{column['column']} {column['type']}" for column in columns)
+            parts.append(f"{table['table']} ({column_list})  -- {table['comment']}")
+        return {"schema": "\n".join(parts), "attempts": 0, "error": None, "unavailable": False, "empty_result": False}
+
+    async def generate_sql(self, state: ZeroQueryState) -> ZeroQueryState:
+        if self.llm is None:
             return {"sql": mock_generate_sql(state["question"])}
         system = SQL_PROMPT.format(schema=state["schema"])
         if state.get("error"):
             system += REPAIR_SUFFIX.format(sql=state.get("sql", ""), error=state["error"])
-        reply = await llm.ainvoke([SystemMessage(system), HumanMessage(state["question"])])
+        elif state.get("empty_result"):
+            system += EMPTY_RESULT_SUFFIX.format(sql=state.get("sql", ""))
+        reply = await self.llm.ainvoke([SystemMessage(system), HumanMessage(state["question"])])
         return {"sql": extract_sql(message_text(reply))}
 
-    async def execute_sql(state: ZeroQueryState) -> ZeroQueryState:
+    async def execute_sql(self, state: ZeroQueryState) -> ZeroQueryState:
         attempts = state.get("attempts", 0) + 1
         try:
-            result = await tools.execute_query(state["sql"])
+            result = await self.tools.execute_query(state["sql"])
         except ToolCallError as exc:
-            return {"error": str(exc), "attempts": attempts}
+            return {"error": str(exc), "unavailable": exc.unavailable, "attempts": attempts}
         return {
             "columns": result["columns"],
             "rows": result["rows"],
             "truncated": result["truncated"],
             "error": None,
+            "unavailable": False,
+            "empty_result": has_no_data(result["rows"]),
             "attempts": attempts,
         }
 
-    def after_execute(state: ZeroQueryState) -> str:
-        if not state.get("error"):
-            return "summarize"
-        if llm is not None and state["attempts"] < max_attempts:
-            return "generate_sql"
-        return "give_up"
+    def _can_retry(self, state: ZeroQueryState) -> bool:
+        return self.llm is not None and state["attempts"] < self.max_attempts
 
-    async def summarize(state: ZeroQueryState) -> ZeroQueryState:
+    def after_execute(self, state: ZeroQueryState) -> str:
+        if state.get("unavailable"):
+            return "give_up"  # an outage cannot be fixed by rewriting SQL
+        if state.get("error"):
+            return "generate_sql" if self._can_retry(state) else "give_up"
+        if state.get("empty_result") and self._can_retry(state):
+            return "generate_sql"
+        return "summarize"
+
+    async def summarize(self, state: ZeroQueryState) -> ZeroQueryState:
         columns, rows, truncated = state["columns"], state["rows"], state.get("truncated", False)
-        if llm is None:
+        if self.llm is None:
             return {"answer": mock_summarize(columns, rows, truncated)}
         payload = json.dumps(
             {
@@ -166,24 +211,31 @@ def build_sql_agent(tools: ImpalaTools, llm: BaseChatModel | None, max_attempts:
             },
             default=str,
         )
-        reply = await llm.ainvoke(
+        reply = await self.llm.ainvoke(
             [SystemMessage(SUMMARY_PROMPT), HumanMessage(f"Question: {state['question']}\nResult: {payload}")]
         )
         return {"answer": message_text(reply).strip()}
 
-    async def give_up(state: ZeroQueryState) -> ZeroQueryState:
-        return {"answer": "Sorry, I couldn't build a working query for that question. Try rephrasing it."}
+    async def give_up(self, state: ZeroQueryState) -> ZeroQueryState:
+        return {"answer": UNAVAILABLE_ANSWER if state.get("unavailable") else GIVE_UP_ANSWER}
 
-    g = StateGraph(ZeroQueryState)
-    g.add_node("load_schema", load_schema)
-    g.add_node("generate_sql", generate_sql)
-    g.add_node("execute_sql", execute_sql)
-    g.add_node("summarize", summarize)
-    g.add_node("give_up", give_up)
-    g.add_edge(START, "load_schema")
-    g.add_edge("load_schema", "generate_sql")
-    g.add_edge("generate_sql", "execute_sql")
-    g.add_conditional_edges("execute_sql", after_execute, ["summarize", "generate_sql", "give_up"])
-    g.add_edge("summarize", END)
-    g.add_edge("give_up", END)
-    return g.compile()
+    def build(self) -> CompiledStateGraph:
+        graph = StateGraph(ZeroQueryState)
+        graph.add_node("load_schema", self.load_schema)
+        graph.add_node("generate_sql", self.generate_sql)
+        graph.add_node("execute_sql", self.execute_sql)
+        graph.add_node("summarize", self.summarize)
+        graph.add_node("give_up", self.give_up)
+        graph.add_edge(START, "load_schema")
+        graph.add_edge("load_schema", "generate_sql")
+        graph.add_edge("generate_sql", "execute_sql")
+        graph.add_conditional_edges("execute_sql", self.after_execute, ["summarize", "generate_sql", "give_up"])
+        graph.add_edge("summarize", END)
+        graph.add_edge("give_up", END)
+        return graph.compile()
+
+
+def build_sql_agent(
+    tools: ImpalaTools, llm: BaseChatModel | None, max_attempts: int = DEFAULT_MAX_SQL_ATTEMPTS
+) -> CompiledStateGraph:
+    return SqlAgent(tools, llm, max_attempts).build()

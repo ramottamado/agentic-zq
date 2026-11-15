@@ -17,6 +17,7 @@ import random
 import re
 import sqlite3
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Protocol
@@ -29,7 +30,12 @@ _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 
 
 class QueryRejected(ValueError):
-    """The SQL was refused by a guardrail before reaching the engine."""
+    """The SQL was refused (by a guardrail or by the engine). A different query may succeed."""
+
+
+class WarehouseUnavailable(RuntimeError):
+    """The warehouse could not be reached (connection or authentication failure). Retrying the
+    same or a rewritten query will not help until the outage is over."""
 
 
 @dataclass
@@ -185,6 +191,20 @@ class MockWarehouse:
 
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _QUALIFIED_REF = re.compile(r"(?<![\w.`])`?([A-Za-z_]\w*)`?\s*\.\s*`?[A-Za-z_]\w*`?", re.IGNORECASE)
+# impyla/thrift/kerberos raise their own types; match by name rather than import them eagerly.
+_TRANSPORT_ERROR_NAMES = {"TTransportException", "GSSError", "KrbError", "AuthenticationException"}
+
+
+def _is_transport_error(exc: Exception) -> bool:
+    """True for connection/authentication failures, false for a query the engine rejected."""
+    return isinstance(exc, OSError) or any(cls.__name__ in _TRANSPORT_ERROR_NAMES for cls in type(exc).__mro__)
+
+
+def _close_quietly(conn: Any) -> None:
+    try:
+        conn.close()
+    except Exception:
+        logger.debug("closing the Impala connection failed", exc_info=True)
 
 
 class ImpalaWarehouse:
@@ -193,6 +213,9 @@ class ImpalaWarehouse:
     Auth comes from the Kerberos credential cache (KRB5CCNAME); renew it outside this class.
     Access is scoped to `databases` here in addition to whatever Ranger enforces. A fresh
     connection is opened per call because impyla connections are not thread-safe.
+
+    Raises `QueryRejected` when the query is the problem and `WarehouseUnavailable` when the
+    warehouse cannot be reached, so callers can tell "fix the SQL" from "try again later".
     """
 
     def __init__(
@@ -206,7 +229,7 @@ class ImpalaWarehouse:
         krb_host: str | None = None,
         ssl_verify: bool = False,
         ca_cert: str | None = None,
-        connect: Any = None,
+        connect: Callable[..., Any] | None = None,
     ) -> None:
         if not databases:
             raise ValueError("At least one database must be allowed.")
@@ -233,31 +256,31 @@ class ImpalaWarehouse:
             logger.warning("Impala TLS certificate verification is DISABLED (set IMPALA_CA_CERT to enable).")
 
     def _run(self, sql: str, max_rows: int | None = None) -> tuple[list[str], list[list[Any]], bool]:
-        conn = self._connect(**self._kwargs)
+        """Run one statement. `max_rows=None` fetches everything (metadata calls)."""
         try:
-            cur = conn.cursor()
-            try:
-                cur.execute(sql)
-                columns = [d[0] for d in cur.description or []]
-                if max_rows is None:
-                    fetched = cur.fetchall()
-                else:
-                    fetched = cur.fetchmany(max_rows + 1)
-            finally:
-                cur.close()
-        except QueryRejected:
-            raise
+            conn = self._connect(**self._kwargs)
         except Exception as exc:
+            raise WarehouseUnavailable(f"Cannot connect to Impala: {exc}") from exc
+        try:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(sql)
+                columns = [d[0] for d in cursor.description or []]
+                fetched = cursor.fetchall() if max_rows is None else cursor.fetchmany(max_rows + 1)
+            finally:
+                cursor.close()
+        except Exception as exc:
+            if _is_transport_error(exc):
+                raise WarehouseUnavailable(f"Impala connection failed: {exc}") from exc
             raise QueryRejected(f"Query failed: {exc}") from exc
         finally:
-            try:
-                conn.close()
-            except Exception:  # noqa: BLE001 - closing is best effort
-                pass
-        rows = [list(r) for r in fetched]
-        if max_rows is None:
-            return columns, rows, False
-        return columns, rows[:max_rows], len(rows) > max_rows
+            _close_quietly(conn)
+        rows = [list(row) for row in fetched]
+        truncated = max_rows is not None and len(rows) > max_rows
+        return columns, rows[:max_rows], truncated
+
+    def _database_rejection(self, db: str) -> QueryRejected:
+        return QueryRejected(f"Database not allowed: {db}. Allowed: {', '.join(self._databases)}")
 
     def _split(self, table: str) -> tuple[str, str]:
         db, _, name = table.strip().replace("`", "").rpartition(".")
@@ -265,20 +288,20 @@ class ImpalaWarehouse:
         if not _IDENT.match(name) or not _IDENT.match(db):
             raise QueryRejected(f"Invalid table name: {table}")
         if db not in self._databases:
-            raise QueryRejected(f"Database not allowed: {db}. Allowed: {', '.join(self._databases)}")
+            raise self._database_rejection(db)
         return db, name
 
     def list_tables(self) -> list[dict[str, str]]:
-        out: list[dict[str, str]] = []
+        tables: list[dict[str, str]] = []
         for db in self._databases:
             _, rows, _ = self._run(f"SHOW TABLES IN `{db}`")
-            out += [{"table": f"{db}.{r[0]}", "comment": ""} for r in rows]
-        return out
+            tables += [{"table": f"{db}.{row[0]}", "comment": ""} for row in rows]
+        return tables
 
     def describe_table(self, table: str) -> list[dict[str, str]]:
         db, name = self._split(table)
         _, rows, _ = self._run(f"DESCRIBE `{db}`.`{name}`")
-        return [{"column": r[0], "type": r[1]} for r in rows]
+        return [{"column": row[0], "type": row[1]} for row in rows]
 
     def execute(self, sql: str, max_rows: int) -> QueryResult:
         statement = check_read_only(sql)
@@ -292,4 +315,4 @@ class ImpalaWarehouse:
         stripped = re.sub(r"'(?:[^'\\]|\\.)*'", "''", statement)
         for db in _QUALIFIED_REF.findall(stripped):
             if db.lower() not in self._databases:
-                raise QueryRejected(f"Database not allowed: {db}. Allowed: {', '.join(self._databases)}")
+                raise self._database_rejection(db)

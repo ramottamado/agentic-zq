@@ -65,3 +65,12 @@ def test_chat_model_sends_attribution_headers(monkeypatch):
     model = get_chat_model(get_settings())
     assert model.default_headers["X-OpenRouter-App-Visibility"] == "hidden"
     assert model.default_headers["HTTP-Referer"] == "https://zq.example.com"
+
+
+def test_frontend_dir_defaults_to_the_repo_ui_and_can_be_overridden(monkeypatch, tmp_path):
+    from zero_query.config import get_settings
+
+    monkeypatch.delenv("ZQ_FRONTEND_DIR", raising=False)
+    assert (get_settings().frontend_dir / "index.html").is_file()
+    monkeypatch.setenv("ZQ_FRONTEND_DIR", str(tmp_path))
+    assert get_settings().frontend_dir == tmp_path

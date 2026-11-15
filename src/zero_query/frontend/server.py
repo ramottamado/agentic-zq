@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 import httpx2
 from fastapi import FastAPI, Request, Response
@@ -22,7 +21,6 @@ from zero_query.config import get_settings
 
 log = logging.getLogger("zero_query.frontend")
 
-FRONTEND_DIR = Path(os.environ.get("ZQ_FRONTEND_DIR", Path(__file__).resolve().parents[3] / "frontend"))
 # Agent runs (several LLM calls + queries) can take a while.
 BACKEND_TIMEOUT = httpx2.Timeout(30.0, read=float(os.environ.get("ZQ_BACKEND_TIMEOUT", "180")))
 _FORWARD_REQUEST_HEADERS = ("content-type", "accept")
@@ -72,7 +70,7 @@ def create_frontend_app(backend_url: str | None = None, transport: httpx2.AsyncB
             media_type=upstream.headers.get("content-type"),
         )
 
-    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+    app.mount("/", StaticFiles(directory=settings.frontend_dir, html=True), name="frontend")
     return app
 
 

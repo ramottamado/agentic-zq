@@ -7,6 +7,9 @@ Guardrails live here, not in the agents: read-only single statements and a row c
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -16,7 +19,33 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from zero_query.config import Settings, get_settings
-from zero_query.mcp_impala.warehouse import ImpalaWarehouse, MockWarehouse, QueryRejected, Warehouse
+from zero_query.errors import WAREHOUSE_UNAVAILABLE_MARKER
+from zero_query.mcp_impala.warehouse import (
+    ImpalaWarehouse,
+    MockWarehouse,
+    QueryRejected,
+    Warehouse,
+    WarehouseUnavailable,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _tool_errors() -> Iterator[None]:
+    """Turn warehouse errors into tool errors the agent can act on.
+
+    A rejected query is reported verbatim so the agent can fix its SQL. An outage is logged in
+    full here but reported generically (no hostnames or Kerberos details) with a marker the agent
+    recognises, so it stops retrying instead of rewriting a query that was never wrong.
+    """
+    try:
+        yield
+    except QueryRejected as exc:
+        raise ToolError(str(exc)) from exc
+    except WarehouseUnavailable as exc:
+        logger.error("warehouse unavailable: %s", exc)
+        raise ToolError(f"{WAREHOUSE_UNAVAILABLE_MARKER}: the data warehouse is temporarily unreachable.") from exc
 
 
 def build_warehouse(settings: Settings) -> Warehouse:
@@ -54,15 +83,14 @@ def build_server(warehouse: Warehouse | None = None, max_rows: int | None = None
     @server.tool()
     def list_tables() -> dict[str, Any]:
         """List queryable tables (as db.table) with a short description of each."""
-        return {"tables": wh.list_tables()}
+        with _tool_errors():
+            return {"tables": wh.list_tables()}
 
     @server.tool()
     def describe_table(table: str) -> dict[str, Any]:
         """Return the columns and types of a table, given as db.table."""
-        try:
+        with _tool_errors():
             return {"table": table, "columns": wh.describe_table(table)}
-        except QueryRejected as exc:  # surfaced to the agent so it can self-correct
-            raise ToolError(str(exc)) from exc
 
     @server.tool()
     def execute_query(sql: str) -> dict[str, Any]:
@@ -70,10 +98,8 @@ def build_server(warehouse: Warehouse | None = None, max_rows: int | None = None
 
         Results are capped; `truncated` is true when more rows exist than were returned.
         """
-        try:
+        with _tool_errors():
             return wh.execute(sql, max_rows=row_cap).to_dict()
-        except QueryRejected as exc:  # surfaced to the agent so it can self-correct
-            raise ToolError(str(exc)) from exc
 
     return server
 
