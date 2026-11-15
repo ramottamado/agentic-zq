@@ -22,12 +22,15 @@ from zero_query.config import DEFAULT_MAX_SQL_ATTEMPTS
 
 
 def build_graph(
-    tools: ImpalaTools, llm: BaseChatModel | None, max_sql_attempts: int = DEFAULT_MAX_SQL_ATTEMPTS
+    tools: ImpalaTools,
+    llm: BaseChatModel | None,
+    max_sql_attempts: int = DEFAULT_MAX_SQL_ATTEMPTS,
+    schema_sample_values: int = 0,
 ) -> CompiledStateGraph:
     g = StateGraph(ZeroQueryState)
     g.add_node("router", make_router(llm))
     g.add_node("general_agent", make_general_agent(llm))
-    g.add_node("sql_agent", build_sql_agent(tools, llm, max_attempts=max_sql_attempts))
+    g.add_node("sql_agent", build_sql_agent(tools, llm, max_sql_attempts, schema_sample_values))
     g.add_edge(START, "router")
     g.add_conditional_edges("router", lambda s: s["route"], {"general": "general_agent", "sql": "sql_agent"})
     g.add_edge("general_agent", END)

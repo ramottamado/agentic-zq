@@ -77,6 +77,7 @@ UI (frontend/) -> Backend (FastAPI) -> LangGraph agents -> MCP client -> MCP ser
 | `ZQ_SERVE_UI` | true (false in `app_backend.py`) | Backend also serves `frontend/` |
 | `MCP_HOST_CHECK` / `MCP_ALLOWED_HOSTS` | true / empty | MCP Host-header validation (see Deployment) |
 | `ZQ_MAX_ROWS` / `ZQ_MAX_SQL_ATTEMPTS` | 200 / 3 | Result row cap / SQL repair attempts |
+| `ZQ_SCHEMA_SAMPLE_VALUES` | 0 (off) | Backend: show the LLM up to N distinct values of each low-cardinality text column in the schema (`col string [values: 'C', 'D']`), so filters use real codes. **Sends warehouse values to the LLM provider.** Columns with more than N distinct values, or values over 40 chars, are skipped entirely; only a bounded window of rows is read and results are cached for an hour |
 | `ZQ_KEYTAB` / `ZQ_KRB_PRINCIPAL` | unset | MCP launcher: keytab path and principal for `kinit -kt` (set both or neither) |
 | `ZQ_KRB5_CCACHE` / `ZQ_KRB_REFRESH_SECONDS` | /tmp/zq_krb5cc_<uid> / 3600 | Credential cache the launcher writes / ticket refresh interval |
 | `CDSW_APP_POLLING_ENDPOINT` | CAI default | Health path CAI polls (see Deployment); set on each app |

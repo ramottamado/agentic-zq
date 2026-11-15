@@ -59,6 +59,9 @@ class Settings:
     max_rows: int
     # How many times the SQL agent may regenerate SQL after an execution error
     max_sql_attempts: int
+    # Max distinct values of a text column to show the LLM in the schema (0 = off). Sampled warehouse
+    # values are sent to the LLM provider, so this is opt-in.
+    schema_sample_values: int
     # Warehouse behind the MCP server: "mock" (SQLite) or "impala"
     warehouse: str
     impala_host: str | None
@@ -116,6 +119,7 @@ def get_settings() -> Settings:
         service_token=os.environ.get("ZQ_SERVICE_TOKEN") or None,
         max_rows=int(os.environ.get("ZQ_MAX_ROWS", "200")),
         max_sql_attempts=int(os.environ.get("ZQ_MAX_SQL_ATTEMPTS", DEFAULT_MAX_SQL_ATTEMPTS)),
+        schema_sample_values=int(os.environ.get("ZQ_SCHEMA_SAMPLE_VALUES", "0")),
         warehouse=os.environ.get("ZQ_WAREHOUSE", "mock").strip().lower(),
         impala_host=os.environ.get("IMPALA_HOST") or None,
         impala_port=int(os.environ.get("IMPALA_PORT", "443")),

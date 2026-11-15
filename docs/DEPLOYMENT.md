@@ -86,7 +86,7 @@ Names only; values live in the apps. `*` marks secrets (masked by the script).
 | App | Variables |
 |---|---|
 | `zq-mcp` | `ZQ_WAREHOUSE`, `IMPALA_HOST`, `IMPALA_PORT`, `IMPALA_HTTP_PATH`, `IMPALA_KRB_SERVICE_NAME`, `IMPALA_KRB_HOST`, `IMPALA_SSL_VERIFY`, `IMPALA_CA_CERT`, `IMPALA_DATABASES`, `ZQ_MAX_ROWS`, `ZQ_KEYTAB`, `ZQ_KRB_PRINCIPAL`, `ZQ_SERVICE_TOKEN`\*, `CDSW_APP_POLLING_ENDPOINT` |
-| `zq-backend` | `ZQ_MCP_SUBDOMAIN`, `ZQ_MAX_SQL_ATTEMPTS`, `OPENROUTER_API_KEY`\*, `OPENROUTER_MODEL`, `OPENROUTER_APP_URL`, `ZQ_SERVICE_TOKEN`\*, `CDSW_APP_POLLING_ENDPOINT` |
+| `zq-backend` | `ZQ_MCP_SUBDOMAIN`, `ZQ_MAX_SQL_ATTEMPTS`, `ZQ_SCHEMA_SAMPLE_VALUES`, `OPENROUTER_API_KEY`\*, `OPENROUTER_MODEL`, `OPENROUTER_APP_URL`, `ZQ_SERVICE_TOKEN`\*, `CDSW_APP_POLLING_ENDPOINT` |
 | `zq` | `ZQ_BACKEND_SUBDOMAIN`, `ZQ_SERVICE_TOKEN`\*, `CDSW_APP_POLLING_ENDPOINT` |
 
 The full list with defaults is in [CLAUDE.md](../CLAUDE.md#configuration-env-vars).
@@ -148,7 +148,7 @@ Application logs are in the CAI UI (the application's page).
 | `/api/ask` returns an answer saying it couldn't build a query, naming `sales.*` | The backend is on the mock LLM (no `OPENROUTER_API_KEY`), which only knows the sample schema. |
 | `502 ... could not complete this request (ref abcd1234)` from `/api/ask` | The pipeline failed; the cause is in the backend's log under that reference (the browser deliberately gets no internals). Seen causes: OpenRouter rate-limiting (`429`, common with free models: retry later or change model), and once a transient connection error on the first request after a restart that did not recur. |
 | "The data warehouse is temporarily unavailable" | The MCP app could not reach Impala (connection or Kerberos failure). The agent does not retry or rewrite SQL for this. Check the MCP app's log (details are logged there, not shown to users) and the Kerberos rows above. |
-| Answer is wrong but there is no error | The model guessed a column value (for example `'CREDIT'` instead of `'C'`). An empty or all-`NULL` result is now retried with the previous query shown to the model, but a wrong filter that still returns rows cannot be detected. A larger model helps. Putting sampled column values in the schema prompt would too, but it sends warehouse data to the LLM provider, so it is not enabled. |
+| Answer is wrong but there is no error | The model guessed a column value (for example `'CREDIT'` instead of `'C'`). An empty or all-`NULL` result is now retried with the previous query shown to the model, but a wrong filter that still returns rows cannot be detected. A larger model helps, and so does `ZQ_SCHEMA_SAMPLE_VALUES` (for example `20`): it shows the model the real values of low-cardinality text columns, such as `trdorc string [values: 'C', 'D']`. It is **off by default** because those values are sent to the LLM provider; columns with more distinct values than the cap are never sent. Enable with `set zq-backend ZQ_SCHEMA_SAMPLE_VALUES=20 --restart`. |
 | `set` says the app is fine but nothing changed | You didn't restart. Variables only apply on start. |
 | Setting run-as fails with `500 ... right permissions` | The account isn't a project machine user yet; see step 4 under "First deployment". |
 | Old app URL shows a certificate error | The subdomain was changed. Use the new URL. |

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from numbers import Number
 from typing import Any
 
@@ -35,6 +36,7 @@ Rules:
 - Return ONLY the SQL, no explanation, no code fences.
 - One SELECT (or WITH ... SELECT) statement. Aggregate where sensible; add ORDER BY and LIMIT for "top" questions.
 - Use readable column aliases (e.g. total_revenue).
+- Where a column lists [values: ...], those are its actual values: filter with them exactly (spelling and case).
 
 Schema:
 {schema}"""
@@ -64,12 +66,25 @@ UNAVAILABLE_ANSWER = "The data warehouse is temporarily unavailable. Please try 
 
 SUMMARY_ROW_LIMIT = 50
 
+# Sampling column values for the prompt (opt-in, see Settings.schema_sample_values).
+SAMPLE_SCAN_ROWS = 100_000  # look at this many rows only, so a huge table is never fully scanned
+MAX_SAMPLED_COLUMNS_PER_TABLE = 10
+MAX_SAMPLE_VALUE_LENGTH = 40  # longer values look like free text, not codes
+SAMPLE_TTL_SECONDS = 3600
+_TEXT_TYPES = ("string", "varchar", "char", "text")
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_QUALIFIED_TABLE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$")
+
 _FENCE = re.compile(r"```(?:sql)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
 def extract_sql(text: str) -> str:
     match = _FENCE.search(text)
     return (match.group(1) if match else text).strip().rstrip(";").strip()
+
+
+def _sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 def has_no_data(rows: list[list[Any]]) -> bool:
@@ -147,18 +162,69 @@ def mock_summarize(columns: list[str], rows: list[list[Any]], truncated: bool) -
 class SqlAgent:
     """The nodes of the SQL subgraph. `llm=None` selects the rule-based mock behaviour."""
 
-    def __init__(self, tools: ImpalaTools, llm: BaseChatModel | None, max_attempts: int) -> None:
+    def __init__(
+        self,
+        tools: ImpalaTools,
+        llm: BaseChatModel | None,
+        max_attempts: int,
+        sample_values: int = 0,
+        sample_ttl_seconds: float = SAMPLE_TTL_SECONDS,
+    ) -> None:
         self.tools = tools
         self.llm = llm
         self.max_attempts = max_attempts
+        self.sample_values = sample_values
+        self.sample_ttl_seconds = sample_ttl_seconds
+        self._samples: dict[str, tuple[float, dict[str, list[str]]]] = {}  # table -> (when, column -> values)
+
+    async def _distinct_values(self, table: str, column: str) -> list[str]:
+        """The column's distinct values if it has few short ones (a code or category), else []."""
+        if not (_QUALIFIED_TABLE.match(table) and _IDENTIFIER.match(column)):
+            return []
+        limit = self.sample_values + 1  # one extra tells us the column has too many values to list
+        sql = (
+            f"SELECT DISTINCT `{column}` FROM (SELECT `{column}` FROM {table} LIMIT {SAMPLE_SCAN_ROWS}) sampled "
+            f"LIMIT {limit}"
+        )
+        try:
+            result = await self.tools.execute_query(sql)
+        except ToolCallError:
+            return []  # sampling is a hint; never let it break the question
+        values = [row[0] for row in result["rows"] if row and row[0] is not None]
+        if len(values) > self.sample_values or any(len(str(v)) > MAX_SAMPLE_VALUE_LENGTH for v in values):
+            return []
+        return sorted(str(v) for v in values)
+
+    async def _sample_columns(self, table: str, columns: list[dict[str, str]]) -> dict[str, list[str]]:
+        """Distinct values per low-cardinality text column, cached for `sample_ttl_seconds`."""
+        if self.llm is None or self.sample_values <= 0:
+            return {}
+        cached = self._samples.get(table)
+        if cached and time.monotonic() - cached[0] < self.sample_ttl_seconds:
+            return cached[1]
+        text_columns = [c["column"] for c in columns if c["type"].lower().startswith(_TEXT_TYPES)]
+        found: dict[str, list[str]] = {}
+        for column in text_columns[:MAX_SAMPLED_COLUMNS_PER_TABLE]:
+            if values := await self._distinct_values(table, column):
+                found[column] = values
+        self._samples[table] = (time.monotonic(), found)
+        return found
 
     async def load_schema(self, state: ZeroQueryState) -> ZeroQueryState:
         parts = []
         for table in await self.tools.list_tables():
             columns = await self.tools.describe_table(table["table"])
-            column_list = ", ".join(f"{column['column']} {column['type']}" for column in columns)
+            samples = await self._sample_columns(table["table"], columns)
+            column_list = ", ".join(self._describe_column(column, samples) for column in columns)
             parts.append(f"{table['table']} ({column_list})  -- {table['comment']}")
         return {"schema": "\n".join(parts), "attempts": 0, "error": None, "unavailable": False, "empty_result": False}
+
+    @staticmethod
+    def _describe_column(column: dict[str, str], samples: dict[str, list[str]]) -> str:
+        text = f"{column['column']} {column['type']}"
+        if values := samples.get(column["column"]):
+            text += f" [values: {', '.join(_sql_literal(v) for v in values)}]"
+        return text
 
     async def generate_sql(self, state: ZeroQueryState) -> ZeroQueryState:
         if self.llm is None:
@@ -236,6 +302,9 @@ class SqlAgent:
 
 
 def build_sql_agent(
-    tools: ImpalaTools, llm: BaseChatModel | None, max_attempts: int = DEFAULT_MAX_SQL_ATTEMPTS
+    tools: ImpalaTools,
+    llm: BaseChatModel | None,
+    max_attempts: int = DEFAULT_MAX_SQL_ATTEMPTS,
+    sample_values: int = 0,
 ) -> CompiledStateGraph:
-    return SqlAgent(tools, llm, max_attempts).build()
+    return SqlAgent(tools, llm, max_attempts, sample_values).build()

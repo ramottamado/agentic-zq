@@ -74,6 +74,7 @@ Everything is read from environment variables; set secrets as CAI project or app
 | `OPENROUTER_APP_URL` / `OPENROUTER_APP_TITLE` / `OPENROUTER_APP_HIDDEN` | unset / `zq` / `true` | OpenRouter app attribution. The URL is what makes OpenRouter create the app entry; `hidden` keeps it out of public rankings, but only when the entry is first created |
 | `ZQ_WAREHOUSE` | `mock` | `mock` or `impala` |
 | `ZQ_MAX_ROWS` / `ZQ_MAX_SQL_ATTEMPTS` | 200 / 3 | Result row cap / SQL repair attempts |
+| `ZQ_SCHEMA_SAMPLE_VALUES` | 0 (off) | Opt-in: show the LLM the distinct values of low-cardinality text columns so it filters on real codes. Those values are sent to the LLM provider |
 | `ZQ_SERVICE_TOKEN` | unset | Bearer token on frontend to backend to MCP calls |
 
 ## Project layout
@@ -109,4 +110,5 @@ uv run pytest tests/test_graph.py::test_mock_sql_route     # a single test
 - **Guardrails are in the MCP server, and Ranger is the real boundary.** The read-only check and database allowlist are a second layer, not a replacement for warehouse permissions. The `otherdb.table` check is a heuristic.
 - **TLS verification to Impala is off by default.** That exposes the connection to impersonation. Supply a CA certificate and enable it.
 - **Keytabs are credentials.** They belong in the gitignored `keytabs/` folder, never in git, and should not be world-readable.
+- **Sampling column values is opt-in** (`ZQ_SCHEMA_SAMPLE_VALUES`). It sends actual warehouse values to the LLM provider, limited to short, low-cardinality text columns, but it is still data leaving the warehouse. Enable it only if that is acceptable for the data.
 - LLM output is untrusted: the model only ever reaches the warehouse through the guarded MCP tools.

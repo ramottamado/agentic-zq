@@ -50,6 +50,7 @@ def create_app(graph: CompiledStateGraph | None = None) -> FastAPI:
             ImpalaTools(settings.mcp_url, headers=settings.auth_headers),
             get_chat_model(settings),
             settings.max_sql_attempts,
+            settings.schema_sample_values,
         )
         yield
 
