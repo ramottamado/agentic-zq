@@ -1,0 +1,55 @@
+{
+  "_comment": "Non-secret definition of the three CAI Applications. ${VAR} / ${VAR:-default} are filled from the local environment when `cai_apps.py create` runs. Secrets (ZQ_SERVICE_TOKEN, OPENROUTER_API_KEY) are never stored here: set them afterwards with `cai_apps.py set <app> KEY=@/path/to/file`.",
+  "runtime_match": "pbj-workbench-python3.12-standard",
+  "apps": [
+    {
+      "name": "Zero Query MCP",
+      "subdomain": "zq-mcp",
+      "script": "scripts/cai/app_mcp_server.py",
+      "cpu": 1,
+      "memory": 2,
+      "description": "Impala MCP server (read-only guardrails) for Zero Query",
+      "env": {
+        "ZQ_WAREHOUSE": "${ZQ_WAREHOUSE:-impala}",
+        "IMPALA_HOST": "${IMPALA_HOST}",
+        "IMPALA_PORT": "443",
+        "IMPALA_HTTP_PATH": "cliservice",
+        "IMPALA_KRB_SERVICE_NAME": "hive",
+        "IMPALA_KRB_HOST": "${IMPALA_KRB_HOST}",
+        "IMPALA_SSL_VERIFY": "false",
+        "IMPALA_DATABASES": "${IMPALA_DATABASES:-default}",
+        "ZQ_MAX_ROWS": "200",
+        "ZQ_KEYTAB": "${ZQ_KEYTAB}",
+        "ZQ_KRB_PRINCIPAL": "${ZQ_KRB_PRINCIPAL}",
+        "CDSW_APP_POLLING_ENDPOINT": "/health"
+      }
+    },
+    {
+      "name": "Zero Query Backend",
+      "subdomain": "zq-backend",
+      "script": "scripts/cai/app_backend.py",
+      "cpu": 1,
+      "memory": 2,
+      "description": "Zero Query backend API and LangGraph agents",
+      "env": {
+        "ZQ_MCP_SUBDOMAIN": "zq-mcp",
+        "ZQ_MAX_SQL_ATTEMPTS": "3",
+        "OPENROUTER_MODEL": "${OPENROUTER_MODEL}",
+        "OPENROUTER_APP_URL": "${OPENROUTER_APP_URL}",
+        "CDSW_APP_POLLING_ENDPOINT": "/api/health"
+      }
+    },
+    {
+      "name": "Zero Query",
+      "subdomain": "zq",
+      "script": "scripts/cai/app_frontend.py",
+      "cpu": 0.5,
+      "memory": 1,
+      "description": "Zero Query web UI for business users",
+      "env": {
+        "ZQ_BACKEND_SUBDOMAIN": "zq-backend",
+        "CDSW_APP_POLLING_ENDPOINT": "/health"
+      }
+    }
+  ]
+}
