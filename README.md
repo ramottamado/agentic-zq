@@ -48,6 +48,8 @@ Generated SQL runs on Impala, not SQLite. The mock warehouse's dialect differs (
 
 ## Deploying on Cloudera AI
 
+Step-by-step setup, changing environment variables, and troubleshooting are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). `scripts/cai_apps.py` creates, configures and restarts the apps through the CAI API.
+
 Three Applications, one launcher script each in `scripts/cai/`. Each launcher syncs the shared `.venv` with `uv sync --inexact`, then runs its component on `127.0.0.1:$CDSW_APP_PORT`.
 
 | Application | Script | Health path (`CDSW_APP_POLLING_ENDPOINT`) |
@@ -84,7 +86,9 @@ src/zero_query/
   mcp_impala/    MCP server (tools + guardrails) and Warehouse implementations
   config.py      Settings from environment variables
 frontend/        Static UI (HTML/JS/CSS)
-scripts/         start_app.py (all-in-one) and cai/ launchers
+scripts/         start_app.py (all-in-one), cai/ launchers, cai_apps.py (manage the CAI apps)
+deploy/          apps.json: non-secret definition of the three CAI Applications
+docs/            DEPLOYMENT.md: deploying and operating the apps
 tests/           pytest suite
 ```
 

@@ -22,6 +22,8 @@ python scripts/start_app.py               # all-in-one: MCP server (bg) + backen
 uv run zq-mcp                             # MCP server only (http://127.0.0.1:8765/mcp)
 uv run zq-backend                         # backend (+ UI unless ZQ_SERVE_UI=false); needs zq-mcp
 uv run zq-frontend                        # UI + /api proxy; needs ZQ_BACKEND_URL
+
+python scripts/cai_apps.py list           # manage the deployed CAI Applications (env, set, restart, ...); see docs/DEPLOYMENT.md
 ```
 
 ## Deployment (Cloudera AI Applications)
@@ -39,7 +41,7 @@ Three Applications, one script each in `scripts/cai/` (run with the runtime's sy
 - **Run-as and tokens:** the apps run as a dedicated machine user (service account), which must first be added to the project as a run-as account. `ZQ_SERVICE_TOKEN` is a dedicated key set explicitly on all three apps. Do not fall back to the injected `CDSW_API_KEY`/`CDSW_APIV2_KEY`: they belong to whoever runs the app and may be rotated.
 - **Health checks:** set `CDSW_APP_POLLING_ENDPOINT` per app: MCP `/health`, backend `/api/health`, frontend `/health`. The MCP and frontend `/health` are liveness only (they never touch the warehouse or backend), so a Kerberos or warehouse problem cannot make CAI restart-loop the app.
 - **Kerberos:** CAI starts each app with a ticket for the run-as user, but it lasts ~15 min. With `ZQ_KEYTAB` (path relative to the project root, e.g. `keytabs/svc-account.keytab`) and `ZQ_KRB_PRINCIPAL` set, `app_mcp_server.py` runs `kinit -kt` at start and every `ZQ_KRB_REFRESH_SECONDS` into its own cache (`ZQ_KRB5_CCACHE`, default `/tmp/zq_krb5cc_<uid>`), so it never hits the renewal limit. A failed login is fatal only when `ZQ_WAREHOUSE=impala`. Keytabs live in the gitignored `keytabs/`; never commit them.
-- Applications are managed through the CAI API v2 (`/api/v2/projects/$CDSW_PROJECT_ID/applications`, Bearer `$CDSW_APIV2_KEY`). Creating an app starts it immediately; `PATCH` takes `environment` as a JSON-encoded string and replaces it whole, so send the full dict. Env var changes need a restart.
+- Manage the apps with `python scripts/cai_apps.py` (list / env / set / restart / stop / run-as / create from `deploy/apps.json`); full guide in `docs/DEPLOYMENT.md`. Facts to remember: creating an app starts it immediately; `PATCH` takes `environment` as a JSON-encoded string and replaces it whole (always send the full dict); env var changes need a restart. Never print secrets: `cai_apps.py env` masks them, and `set KEY=@file` reads values from a file.
 - Launchers must never `uv sync` without `--inexact`: all apps and sessions share one `.venv`, and an exact `--no-dev` sync would strip dev tools.
 
 **Never run ruff (or any formatter/linter) with an explicit path outside `src/ tests/ scripts/`.** The project root is also `$HOME`, so `.cache/uv`, `.venv`, `.claude`, `.local` live here. `pyproject.toml` restricts ruff via `include`/`extend-exclude`; keep those settings. If cache or venv files are ever modified, rebuild with `uv cache clean && rm -rf .venv && uv sync` (uv hardlinks the venv from its cache, so editing one edits both).
