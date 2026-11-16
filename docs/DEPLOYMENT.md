@@ -96,7 +96,7 @@ The full list with defaults is in [CLAUDE.md](../CLAUDE.md#configuration-env-var
 ## Inspecting and changing variables
 
 ```bash
-python scripts/cai_apps.py env zq-backend                 # secrets shown as <set, N chars>
+python scripts/cai_apps.py env zq-backend                 # secrets shown as <set>
 python scripts/cai_apps.py env zq-backend --reveal        # prints secret values: mind your terminal and logs
 python scripts/cai_apps.py set zq-backend OPENROUTER_MODEL=vendor/model --restart
 python scripts/cai_apps.py set zq-mcp --unset IMPALA_CA_CERT

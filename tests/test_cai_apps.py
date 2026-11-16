@@ -18,7 +18,7 @@ def test_mask_hides_only_secret_names():
         "ZQ_WAREHOUSE": "impala",
     }
     masked = cai.mask(env)
-    assert masked["ZQ_SERVICE_TOKEN"] == "<set, 3 chars>" and masked["OPENROUTER_API_KEY"] == "<set, 10 chars>"
+    assert masked["ZQ_SERVICE_TOKEN"] == "<set>" and masked["OPENROUTER_API_KEY"] == "<set>"
     # ZQ_KEYTAB contains "KEY" but is not a secret value; only the suffix counts.
     assert masked["ZQ_KEYTAB"] == "keytabs/x" and masked["ZQ_WAREHOUSE"] == "impala"
 
@@ -50,7 +50,7 @@ def test_find_app_by_subdomain_or_name():
 
 
 def test_manifest_has_no_secrets_or_hostnames():
-    text = cai.MANIFEST.read_text()
+    text = (Path(__file__).resolve().parents[1] / "deploy" / "apps.json").read_text()
     assert "TOKEN" not in text.replace("ZQ_SERVICE_TOKEN", "") and "API_KEY" not in text.replace(
         "OPENROUTER_API_KEY", ""
     )
