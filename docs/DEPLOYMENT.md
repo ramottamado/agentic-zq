@@ -8,6 +8,8 @@ Everything below uses [`scripts/cai_apps.py`](../scripts/cai_apps.py), a standar
 python scripts/cai_apps.py --help
 ```
 
+> **Claude Code users:** the general parts of this guide (CAI Application lifecycle, `cai_apps.py` usage, launcher rules, generic troubleshooting) are also covered by the `cai-apps` Claude Code skill, if you have it installed (as a user skill or from a plugin). This document remains the source for what is specific to Zero Query: the three apps, their variables, OpenRouter attribution, and the SQL/LLM troubleshooting rows.
+
 ## The three applications
 
 | Subdomain | Script | Role | Health path |
