@@ -88,4 +88,6 @@ UI (frontend/) -> Backend (FastAPI) -> LangGraph agents -> MCP client -> MCP ser
 | `IMPALA_SSL_VERIFY` / `IMPALA_CA_CERT` | false / unset | TLS verification is **off** by default; set a CA cert path and `IMPALA_SSL_VERIFY=true` to enable |
 | `IMPALA_DATABASES` | default | Comma-separated databases the app exposes (on top of Ranger) |
 
+**Claude Code plugin pin:** the `cai-apps` skill comes from the `skills@ramottamado` plugin (marketplace `ramottamado/skills`), pinned at version 0.4.0, commit `b60ae1b3a8934bf949f221235ae4d546f06ac377`. Because `.claude/` is ignored, the pin lives only in each user's `~/.claude/settings.json`: set `extraKnownMarketplaces.ramottamado.source.ref` to that full SHA (needs Claude Code 2.1.324+) and `enabledPlugins` `"skills@ramottamado": true`. Marketplace auto-update stays off (check **Marketplaces** in `/plugin`). To upgrade: move `ref` to the new release commit, run `/plugin marketplace update ramottamado`, re-copy the skill's `cai_apps.py` over `scripts/cai_apps.py`, run the tests, and update the version in this file and in the script's docstring.
+
 Set secrets as CAI project or application environment variables. `.gitignore` ignores all dotfiles (`.*`), including `.env` and `.claude/`.
